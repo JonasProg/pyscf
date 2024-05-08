@@ -8,6 +8,7 @@ from . import qmmm
 #from . import semiempirical
 from . import sgx
 from . import solvent
+from . import embedding
 from . import tools
 from . import x2c
 
