@@ -81,17 +81,42 @@ class PolarizableEmbedding(lib.StreamObject):
                 self.vdw_combination_rule = self.options['vdw']['combination_rule']
             else:
                 self.vdw_combination_rule = 'Lorentz-Berthelot'
-            self.e_rep = repulsion_interactions(quantum_subsystem=self.quantum_subsystem,
-                                                classical_subsystem=self.classical_subsystem,
-                                                method=self.vdw_method,
-                                                combination_rule=self.vdw_combination_rule)
-            self.e_disp = self.e_rep = repulsion_interactions(quantum_subsystem=self.quantum_subsystem,
-                                                              classical_subsystem=self.classical_subsystem,
-                                                              method=self.vdw_method,
-                                                              combination_rule=self.vdw_combination_rule)
+            self.e_rep = repulsion_interactions.compute_repulsion_interactions(
+                quantum_subsystem=self.quantum_subsystem,
+                classical_subsystem=self.classical_subsystem,
+                method=self.vdw_method,
+                combination_rule=self.vdw_combination_rule)
+            self.e_disp = dispersion_interactions.compute_dispersion_interactions(
+                quantum_subsystem=self.quantum_subsystem,
+                classical_subsystem=self.classical_subsystem,
+                method=self.vdw_method,
+                combination_rule=self.vdw_combination_rule)
         else:
             self.e_rep = 0.0
             self.e_disp = 0.0
+
+        if 'induced_dipoles' in self.options:
+            if not isinstance(self.options['induced_dipoles'], dict):
+                raise TypeError("induced_dipoles options should be a dictionary.")
+            if 'threshold' in self.options['induced_dipoles']:
+                self.threshold = self.options['induced_dipoles']['threshold']
+            else:
+                self.threshold = 1e-8
+            if 'max_iterations' in self.options['induced_dipoles']:
+                self.max_iterations = self.options['induced_dipoles']['max_iterations']
+            else:
+                self.max_iterations = 100
+            if 'solver' in self.options['induced_dipoles']:
+                self.solver = self.options['induced_dipoles']['solver']
+            else:
+                self.solver = 'jacobi'
+
+        if 'self_energy' in self.options:
+            if not isinstance(self.options['self_energy'], bool):
+                raise TypeError("self_energy options should be a bool.")
+            self.self_energy = self.options['self_energy']
+        else:
+            self.self_energy = False
 
         # e (the electrostatic, induction energy, repulsion energy, and dispersion energy.)
         # and v (the additional potential) are
@@ -102,9 +127,6 @@ class PolarizableEmbedding(lib.StreamObject):
 
     def dump_flags(self, verbose=None):
         logger.info(self, '******** %s flags ********', self.__class__)
-        # TODO PyFraME options and option keys?
-        # options = self.cppe_state.options
-        # option_keys = cppe.valid_option_keys
         for key in self.options.keys():
             logger.info(self, "pyframe.%s = %s", key, self.options[key])
         return self
@@ -133,11 +155,13 @@ class PolarizableEmbedding(lib.StreamObject):
             dm = dm[0] + dm[1]
         e_ind, e_es, v = self._compute_pe_contributions(density_matrices=dm)
         logger.info(self, '******** %s Energy Contributions ********', self.__class__.__name__)
-        logger.info(self, 'Electrostatic Contributions = %.15g', e_es)
-        logger.info(self, 'Induced Contributions = %.15g', e_ind)
+        logger.info(self, 'Electrostatic Contributions (E_es) = %.15g', e_es)
+        logger.info(self, 'Induced Contributions (E_ind) = %.15g', e_ind)
         if 'vdw' in self.options:
-            logger.info(self, 'Repulsion Contributions = %.15g', self.e_rep)
-            logger.info(self, 'Dispersion Contributions = %.15g', self.e_disp)
+            logger.info(self, 'Repulsion Contributions (E_rep) = %.15g', self.e_rep)
+            logger.info(self, 'Dispersion Contributions (E_disp) = %.15g', self.e_disp)
+        if self.self_energy:
+            logger.info(self, 'Self Energy Contributions (E_mul) = %.15g', self.classical_subsystem.self_energy())
         self.e = e_ind + e_es + self.e_disp + self.e_rep
         self.v = v
         return self.e, self.v
@@ -167,7 +191,7 @@ class PolarizableEmbedding(lib.StreamObject):
             fakemol = gto.fakemol_for_charges(self.classical_subsystem.coordinates[idx])
             integral1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ip1')
             moments_1 = np.array([moments[i][1:4] for i in idx])
-            v = np.einsum('aijg,ga,a->ij', integral1, moments_1, )
+            v = np.einsum('aijg,ga->ij', integral1, moments_1)
             op -= v + v.T
         if np.any(self.classical_subsystem.multipole_orders >= 2):
             idx = np.where(self.classical_subsystem.multipole_orders >= 2)[0]
@@ -197,7 +221,10 @@ class PolarizableEmbedding(lib.StreamObject):
                            np.einsum('aijg,ji->ga', j3c, density_matrices[0]))
         nuclear_fields = self.quantum_subsystem.compute_nuclear_fields(self.classical_subsystem.coordinates)
         # Set ind dipoles options here
-        self.classical_subsystem.solve_induced_dipoles(external_fields=(-electric_fields + nuclear_fields))
+        self.classical_subsystem.solve_induced_dipoles(external_fields=(-electric_fields + nuclear_fields),
+                                                       threshold=self.threshold,
+                                                       max_iterations=self.max_iterations,
+                                                       solver=self.solver)
         e_ind = induction_interactions.compute_induction_energy(
             induced_dipoles=self.classical_subsystem.induced_dipoles.
             induced_dipoles,
