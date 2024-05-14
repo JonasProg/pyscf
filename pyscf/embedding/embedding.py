@@ -31,14 +31,14 @@ except ImportError:
     raise ImportError(
         'Unable to import PyFraME. Please install PyFraME.')
 
-from pyframe.embedding import electrostatic_interactions, read_input, induction_interactions
+from pyframe.embedding import (read_input, electrostatic_interactions, induction_interactions, repulsion_interactions,
+                               dispersion_interactions)
 
 from pyscf import lib
 from pyscf.lib import logger
 from pyscf import gto
 from pyscf import df
 from pyscf.embedding import _attach_embedding
-from pyscf.data import elements
 
 
 @lib.with_doc(_attach_embedding._for_scf.__doc__)
@@ -70,6 +70,29 @@ class PolarizableEmbedding(lib.StreamObject):
             quantum_subsystem=self.quantum_subsystem,
             classical_subsystem=self.classical_subsystem)
 
+        if 'vdw' in self.options:
+            if not isinstance(self.options['vdw'], dict):
+                raise TypeError("vdw options should be a dictionary.")
+            if 'method' in self.options['vdw']:
+                self.vdw_method = self.options['vdw']['method']
+            else:
+                self.vdw_method = 'LJ'
+            if 'combination_rule' in self.options['vdw']:
+                self.vdw_combination_rule = self.options['vdw']['combination_rule']
+            else:
+                self.vdw_combination_rule = 'Lorentz-Berthelot'
+            self.e_rep = repulsion_interactions(quantum_subsystem=self.quantum_subsystem,
+                                                classical_subsystem=self.classical_subsystem,
+                                                method=self.vdw_method,
+                                                combination_rule=self.vdw_combination_rule)
+            self.e_disp = self.e_rep = repulsion_interactions(quantum_subsystem=self.quantum_subsystem,
+                                                              classical_subsystem=self.classical_subsystem,
+                                                              method=self.vdw_method,
+                                                              combination_rule=self.vdw_combination_rule)
+        else:
+            self.e_rep = 0.0
+            self.e_disp = 0.0
+
         # e (the electrostatic and induction energy)
         # and v (the additional potential) are
         # updated during the SCF iterations
@@ -80,10 +103,10 @@ class PolarizableEmbedding(lib.StreamObject):
     def dump_flags(self, verbose=None):
         logger.info(self, '******** %s flags ********', self.__class__)
         # TODO PyFraME options and option keys?
-        #options = self.cppe_state.options
-        #option_keys = cppe.valid_option_keys
-        # for key in option_keys:
-        #     logger.info(self, "pyframe.%s = %s", key, options[key])
+        # options = self.cppe_state.options
+        # option_keys = cppe.valid_option_keys
+        for key in self.options.keys():
+            logger.info(self, "pyframe.%s = %s", key, self.options[key])
         return self
 
     def reset(self, mol=None, options_or_json_file=None):
@@ -95,6 +118,8 @@ class PolarizableEmbedding(lib.StreamObject):
         self._create_pyframe_objects()
         self.f_el_es = None
         self.e_nuc_es = None
+        self.e_rep = None
+        self.e_disp = None
         self.e = None
         self.v = None
         self._dm = None
@@ -111,9 +136,11 @@ class PolarizableEmbedding(lib.StreamObject):
         logger.info(self, '******** %s Energy Contributions ********', self.__class__.__name__)
         logger.info(self, 'Electrostatic Contributions = %.15g', e_es)
         logger.info(self, 'Induced Contributions = %.15g', e_ind)
+        if 'vdw' in self.options:
+            logger.info(self, 'Repulsion Contributions = %.15g', self.e_rep)
+            logger.info(self, 'Dispersion Contributions = %.15g', self.e_disp)
         # TODO add dispersion and repulsion from VDW
-
-        self.e = e_ind + e_es
+        self.e = e_ind + e_es + self.e_disp + self.e_rep
         self.v = v
         return self.e, self.v
 
@@ -180,6 +207,8 @@ class PolarizableEmbedding(lib.StreamObject):
         electric_fields = (np.einsum('aijg,ij->ga', j3c, density_matrices[0]) +
                            np.einsum('aijg,ji->ga', j3c, density_matrices[0]))
         nuclear_fields = self.quantum_subsystem.compute_nuclear_fields(self.classical_subsystem.coordinates)
+        # Set ind dipoles options here
+
         self.classical_subsystem.solve_induced_dipoles(external_fields=(-electric_fields + nuclear_fields))
         e_ind = induction_interactions.compute_induction_energy(
             induced_dipoles=self.classical_subsystem.induced_dipoles.
