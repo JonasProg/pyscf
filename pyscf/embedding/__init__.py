@@ -28,12 +28,12 @@ def PE(method_or_mol, solvent_obj):
 
     Examples:
 
-    >>> pe_options = {"potfile": "pyframe.pot"}
+    >>> pe_options = {"json_file": "pyframe.json"}
     >>> mf = PE(scf.RHF(mol), pe_options)
     >>> mf.kernel()
     '''
     from pyscf.embedding import embedding
-    from pyscf import gto, scf, mcscf, tdscf
+    from pyscf import gto, scf
 
     if isinstance(method_or_mol, gto.mole.Mole):
         return embedding.PolarizableEmbedding(method_or_mol, solvent_obj)

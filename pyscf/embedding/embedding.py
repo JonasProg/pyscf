@@ -31,23 +31,27 @@ except ImportError:
     raise ImportError(
         'Unable to import PyFraME. Please install PyFraME.')
 
+from pyframe.embedding import electrostatic_interactions, read_input, induction_interactions
+
 from pyscf import lib
 from pyscf.lib import logger
 from pyscf import gto
 from pyscf import df
-from pyscf.solvent import _attach_solvent
+from pyscf.embedding import _attach_embedding
 from pyscf.data import elements
 
 
-@lib.with_doc(_attach_solvent._for_scf.__doc__)
+@lib.with_doc(_attach_embedding._for_scf.__doc__)
 def embedding_for_scf(mf, solvent_obj):
     if not isinstance(solvent_obj, PolarizableEmbedding):
         solvent_obj = PolarizableEmbedding(mf.mol, solvent_obj)
-    return _attach_solvent._for_scf(mf, solvent_obj)
+    return _attach_embedding._for_scf(mf, solvent_obj)
 
 
 class PolarizableEmbedding(lib.StreamObject):
     def __init__(self, molecule, options_or_json_file):
+        self.stdout = molecule.stdout
+        self.verbose = molecule.verbose
         # communicator?
         self.comm = None
 
@@ -62,7 +66,7 @@ class PolarizableEmbedding(lib.StreamObject):
         self.options = options
         self._create_pyframe_objects()
         self.f_el_es = self._compute_multipole_potential()
-        self.e_nuc_es = pyframe.embedding.electrostatic_interactions.compute_electrostatic_nuclear_energy(
+        self.e_nuc_es = electrostatic_interactions.compute_electrostatic_nuclear_energy(
             quantum_subsystem=self.quantum_subsystem,
             classical_subsystem=self.classical_subsystem)
 
@@ -72,6 +76,15 @@ class PolarizableEmbedding(lib.StreamObject):
         self.e = None
         self.v = None
         self._dm = None
+
+    def dump_flags(self, verbose=None):
+        logger.info(self, '******** %s flags ********', self.__class__)
+        # TODO PyFraME options and option keys?
+        #options = self.cppe_state.options
+        #option_keys = cppe.valid_option_keys
+        # for key in option_keys:
+        #     logger.info(self, "pyframe.%s = %s", key, options[key])
+        return self
 
     def reset(self, mol=None, options_or_json_file=None):
         '''Reset mol and clean up relevant attributes for scanner mode'''
@@ -94,17 +107,20 @@ class PolarizableEmbedding(lib.StreamObject):
             # spin-traced DM for UHF or ROHF
             dm = dm[0] + dm[1]
 
-        e, v = self._compute_pe_contributions(density_matrices=dm)
-        logger.info(self, 'Polarizable embedding energy = %.15g', e)
+        e_ind, e_es, v = self._compute_pe_contributions(density_matrices=dm)
+        logger.info(self, '******** %s Energy Contributions ********', self.__class__.__name__)
+        logger.info(self, 'Electrostatic Contributions = %.15g', e_es)
+        logger.info(self, 'Induced Contributions = %.15g', e_ind)
+        # TODO add dispersion and repulsion from VDW
 
-        self.e = e
+        self.e = e_ind + e_es
         self.v = v
-        return e, v
+        return self.e, self.v
 
     def _create_pyframe_objects(self):
         # should the creation process get a callback and throw back if sth goes wrong?
         # throw exception if its not exactly for one qm and one classical subsystem
-        self.quantum_subsystem, self.classical_subsystem = (pyframe.embedding.input_reader.reader(
+        self.quantum_subsystem, self.classical_subsystem = (read_input.reader(
             input_data=self.options['json_file'],
             comm=self.comm))
 
@@ -165,7 +181,7 @@ class PolarizableEmbedding(lib.StreamObject):
                            np.einsum('aijg,ji->ga', j3c, density_matrices[0]))
         nuclear_fields = self.quantum_subsystem.compute_nuclear_fields(self.classical_subsystem.coordinates)
         self.classical_subsystem.solve_induced_dipoles(external_fields=(-electric_fields + nuclear_fields))
-        e_ind = pyframe.induction_interactions.compute_induction_energy(
+        e_ind = induction_interactions.compute_induction_energy(
             induced_dipoles=self.classical_subsystem.induced_dipoles.
             induced_dipoles,
             total_fields=-electric_fields + nuclear_fields +
@@ -173,4 +189,4 @@ class PolarizableEmbedding(lib.StreamObject):
         f_el_ind = np.einsum('aijg,ga->ij', j3c, self.classical_subsystem.induced_dipoles.
                              induced_dipoles)
         f_el_ind = f_el_ind + f_el_ind.T
-        return e_ind + self.e_nuc_es + e_el_es, self.f_el_es - f_el_ind
+        return e_ind, self.e_nuc_es + e_el_es, self.f_el_es - f_el_ind
