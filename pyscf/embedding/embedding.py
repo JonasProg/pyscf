@@ -93,7 +93,7 @@ class PolarizableEmbedding(lib.StreamObject):
             self.e_rep = 0.0
             self.e_disp = 0.0
 
-        # e (the electrostatic and induction energy)
+        # e (the electrostatic, induction energy, repulsion energy, and dispersion energy.)
         # and v (the additional potential) are
         # updated during the SCF iterations
         self.e = None
@@ -131,7 +131,6 @@ class PolarizableEmbedding(lib.StreamObject):
         if not (isinstance(dm, np.ndarray) and dm.ndim == 2):
             # spin-traced DM for UHF or ROHF
             dm = dm[0] + dm[1]
-
         e_ind, e_es, v = self._compute_pe_contributions(density_matrices=dm)
         logger.info(self, '******** %s Energy Contributions ********', self.__class__.__name__)
         logger.info(self, 'Electrostatic Contributions = %.15g', e_es)
@@ -139,7 +138,6 @@ class PolarizableEmbedding(lib.StreamObject):
         if 'vdw' in self.options:
             logger.info(self, 'Repulsion Contributions = %.15g', self.e_rep)
             logger.info(self, 'Dispersion Contributions = %.15g', self.e_disp)
-        # TODO add dispersion and repulsion from VDW
         self.e = e_ind + e_es + self.e_disp + self.e_rep
         self.v = v
         return self.e, self.v
@@ -188,18 +186,9 @@ class PolarizableEmbedding(lib.StreamObject):
         return op
 
     def _compute_pe_contributions(self, density_matrices):
-        nao = density_matrices.shape[-1]
-        dms = density_matrices.reshape(-1, nao, nao)
-        n_dm = density_matrices.shape[0]
-
-        max_memory = self.max_memory
-
         density_matrices = np.asarray(density_matrices)
-        is_single_dm = density_matrices.ndim == 2
         nao = density_matrices.shape[-1]
         density_matrices = density_matrices.reshape(-1, nao, nao)
-        n_dm = density_matrices.shape[0]
-        max_memory = self.max_memory
         e_el_es = np.einsum('ij,xij->x', self.f_el_es, density_matrices)[0]
         fakemol = gto.fakemol_for_charges(self.classical_subsystem.coordinates)
         # first order derivative of the electronic potential integral
@@ -208,7 +197,6 @@ class PolarizableEmbedding(lib.StreamObject):
                            np.einsum('aijg,ji->ga', j3c, density_matrices[0]))
         nuclear_fields = self.quantum_subsystem.compute_nuclear_fields(self.classical_subsystem.coordinates)
         # Set ind dipoles options here
-
         self.classical_subsystem.solve_induced_dipoles(external_fields=(-electric_fields + nuclear_fields))
         e_ind = induction_interactions.compute_induction_energy(
             induced_dipoles=self.classical_subsystem.induced_dipoles.
