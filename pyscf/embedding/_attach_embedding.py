@@ -68,6 +68,26 @@ class SCFWithEmbedding(_Embedding):
         # iteration. If v_embedding is added here, it may break direct SCF.
         return lib.tag_array(vhf, e_embedding=e_embedding, v_embedding=v_embedding)
 
+    def _finalize(self):
+        '''Hook for dumping results and clearing up the object.'''
+        logger.info(self, '\n******** %s Energy Contributions ********', self.with_embedding.
+                    __class__.__name__)
+        logger.info(self, 'Electrostatic Contributions (E_es) = %.15g', self.with_embedding._e_es)
+        logger.info(self, 'Induced Contributions (E_ind) = %.15g', self.with_embedding._e_ind)
+        if 'vdw' in self.with_embedding.options:
+            logger.info(self, 'Repulsion Contributions (E_rep) = %.15g', self.with_embedding._e_rep)
+            logger.info(self, 'Dispersion Contributions (E_disp) = %.15g', self.with_embedding._e_disp)
+        if self.with_embedding._environment_energy:
+            logger.info(self, 'Environment Energy Contributions (E_mul) = %.15g', self.with_embedding.
+                        classical_subsystem.environment_energy)
+        logger.info(self, '\n')
+        if self.converged:
+            logger.note(self, 'converged SCF energy = %.15g', self.e_tot)
+        else:
+            logger.note(self, 'SCF not converged.')
+            logger.note(self, 'SCF energy = %.15g', self.e_tot)
+        return self
+
     def get_fock(self, h1e=None, s1e=None, vhf=None, dm=None, cycle=-1,
                  diis=None, diis_start_cycle=None,
                  level_shift_factor=None, damp_factor=None, fock_last=None):
