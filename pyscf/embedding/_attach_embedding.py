@@ -12,9 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-# Author: Qiming Sun <osirpt.sun@gmail.com>
-#
 
 '''
 Attach Embedding to SCF
@@ -78,7 +75,7 @@ class SCFWithEmbedding(_Embedding):
             logger.info(self, 'Repulsion Contributions (E_rep) = %.15g', self.with_embedding._e_rep)
             logger.info(self, 'Dispersion Contributions (E_disp) = %.15g', self.with_embedding._e_disp)
         if self.with_embedding._environment_energy:
-            logger.info(self, 'Environment Energy Contributions (E_mul) = %.15g', self.with_embedding.
+            logger.info(self, 'Environment Contributions (E_mul) = %.15g', self.with_embedding.
                         classical_subsystem.environment_energy)
         logger.info(self, '\n')
         if self.converged:
