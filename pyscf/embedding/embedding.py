@@ -228,4 +228,4 @@ class PolarizableEmbedding(lib.StreamObject):
         f_el_ind = np.einsum('aijg,ga->ij', j3c, self.classical_subsystem.induced_dipoles.
                              induced_dipoles)
         f_el_ind = f_el_ind + f_el_ind.T
-        return e_ind, self._e_nuc_es + e_el_es, self._f_el_es - f_el_ind
+        return e_ind, self._e_nuc_es + e_el_es, self._f_el_es + f_el_ind
