@@ -120,17 +120,17 @@ class EmbeddingIntegralDriver:
         # 0 order
         idx = np.where(multipole_orders >= 0)[0]
         charge_coordinates = multipole_coordinates[idx]
-        if not np.array_equal(self.coordinates0, charge_coordinates):
+        if self.coordinates0 is None or not np.array_equal(self.coordinates0, charge_coordinates):
             self.coordinates0 = charge_coordinates
             fakemol = gto.fakemol_for_charges(charge_coordinates)
-            self.integral1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ip1')
+            self.integral0 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e')
         charges = np.array([m[0:1] for m in multipoles])
         op += np.einsum('ijg,ga->ij', self.integral0 * -1.0, charges)
         # 1 order
         if np.any(multipole_orders >= 1):
             idx = np.where(multipole_orders >= 1)[0]
             dipole_coordinates = multipole_coordinates[idx]
-            if not np.array_equal(self.coordinates1, dipole_coordinates):
+            if self.coordinates1 is None or not np.array_equal(self.coordinates1, dipole_coordinates):
                 self.coordinates1 = dipole_coordinates
                 fakemol = gto.fakemol_for_charges(self.coordinates1)
                 self.integral1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ip1')
@@ -142,7 +142,7 @@ class EmbeddingIntegralDriver:
         if np.any(multipole_orders >= 2):
             idx = np.where(multipole_orders >= 2)[0]
             quadrupol_coordinates = multipole_coordinates[idx]
-            if not np.array_equal(self.coordinates0, quadrupol_coordinates):
+            if self.coordinates2 is None or not np.array_equal(self.coordinates0, quadrupol_coordinates):
                 self.coordinates2 = quadrupol_coordinates
                 fakemol = gto.fakemol_for_charges(quadrupol_coordinates)
                 self.integral2_1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipip1')
@@ -312,10 +312,10 @@ class PolarizableEmbedding(lib.StreamObject):
         nao = density_matrix.shape[-1]
         density_matrix = density_matrix.reshape(-1, nao, nao)
         e_el_es = np.einsum('ij,xij->x', self._f_el_es, density_matrix)[0]
-        el_fields = self.quantum_subsystem.compute_electronic_fields(coordinates=self.classical_subsystem.coordinates1,
+        el_fields = self.quantum_subsystem.compute_electronic_fields(coordinates=self.classical_subsystem.coordinates,
                                                                      density_matrix=density_matrix[0],
                                                                      integral_driver=self._integral_driver)
-        nuc_fields = self.quantum_subsystem.compute_nuclear_fields(self.classical_subsystem.coordinates1)
+        nuc_fields = self.quantum_subsystem.compute_nuclear_fields(self.classical_subsystem.coordinates)
         self.classical_subsystem.solve_induced_dipoles(external_fields=(el_fields + nuc_fields),
                                                        threshold=self._threshold,
                                                        max_iterations=self._max_iterations,
