@@ -19,23 +19,142 @@ Analytical nuclear gradients for Embedding
 
 import numpy as np
 
-from pyscf import lib
-from pyscf.lib import logger
-from pyscf import gto
-from pyscf import df, scf
-from pyscf.embedding._attach_embedding import _Embedding
-from pyscf.grad import rhf as rhf_grad
-from pyscf.grad import rks as rks_grad
-
 try:
     import pyframe
 except ImportError:
     raise ImportError(
         'Unable to import PyFraME. Please install PyFraME.')
 
+from pyframe.embedding import electrostatic_interactions, induction_interactions
+
+from pyscf.lib import logger
+from pyscf import gto
+from pyscf import df, scf
+from pyscf.embedding._attach_embedding import _Embedding
+from pyscf.grad import rhf as rhf_grad
+
+
+class EmbeddingIntegralDriver:
+
+    def __init__(self, molecule):
+        self.mol = molecule
+        self.coordinates0 = None
+        self.coordinates1 = None
+        self.coordinates2 = None
+        self.integral0 = None
+        self.integral1_1 = None
+        self.integral1_2 = None
+        self.integral2_1 = None
+        self.integral2_2 = None
+        self.integral2_3 = None
+
+    def multipole_potential_gradient_integrals(self,
+                                               multipole_coordinates: np.ndarray,
+                                               multipole_orders: np.ndarray,
+                                               multipoles: list[np.ndarray]) -> np.ndarray:
+        """Calculate the gradient of the electronic potential integrals and multiply with the multipoles.
+
+        Args:
+            multipole_coordinates: Coordinates of the Multipoles.
+                Shape: (number of atoms, 3)
+                Dtype: np.float64.
+            multipole_orders: Multipole orders of all multipoles.
+                Shape: (number of atoms)
+                Dtype: np.int64
+            multipoles: Multipoles multiplied with degeneracy coefficients and taylor coefficients.
+                Shape: (number of atoms, number of multipole elements)
+                Dtype: np.float64
+
+        Returns:
+            Product of electronic potential integrals and multipoles.
+                Shape: (number of nuclei, number of ao functions, number of ao functions)
+                Dtype: np.float64
+        """
+        if np.any(multipole_orders > 2):
+            raise NotImplementedError("""Multipole potential integrals not
+                                             implemented for order > 2.""")
+        op = 0
+        # 0 order
+        idx = np.where(multipole_orders >= 0)[0]
+        charge_coordinates = multipole_coordinates[idx]
+        if self.coordinates0 is None or not np.array_equal(self.coordinates0, charge_coordinates):
+            self.coordinates0 = charge_coordinates
+            fakemol = gto.fakemol_for_charges(charge_coordinates)
+            self.integral0 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ip1', comp=3)
+        charges = np.array([m[0:1] for m in multipoles])
+        op += np.einsum('cijg,ga->cij', self.integral0 * -1.0, charges)
+        # 1 order
+        if np.any(multipole_orders >= 1):
+            idx = np.where(multipole_orders >= 1)[0]
+            dipole_coordinates = multipole_coordinates[idx]
+            if self.coordinates1 is None or not np.array_equal(self.coordinates1, dipole_coordinates):
+                self.coordinates1 = dipole_coordinates
+                fakemol = gto.fakemol_for_charges(self.coordinates1)
+                self.integral1_1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipip1', comp=9)
+                self.integral1_2 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipvip1', comp=9)
+            integral1_1 = self.integral1_1
+            integral1_2 = self.integral1_2
+            integral1_1 = integral1_1.reshape(3, 3, *integral1_1.shape[1:])
+            integral1_2 = integral1_2.reshape(3, 3, *integral1_2.shape[1:])
+            dipoles = np.array([multipoles[i][1:4] for i in idx])
+            v = np.einsum('caijg,ga->cij', integral1_1, dipoles)
+            v += np.einsum('caijg,ga->cij', integral1_2, dipoles)
+            op += v
+        # 2 order
+        if np.any(multipole_orders >= 2):
+            idx = np.where(multipole_orders >= 2)[0]
+            n_sites = idx.size
+            quadrupoles_non_symmetrized = np.array([multipoles[i][4:10] for i in idx])
+            quadrupoles = np.zeros((n_sites, 9))
+            # FIXME build my own matrix.
+            quadrupoles[:, [0, 1, 2, 4, 5, 8]] = quadrupoles_non_symmetrized
+            quadrupoles[:, [0, 3, 6, 4, 7, 8]] += quadrupoles_non_symmetrized
+            quadrupoles *= -0.5
+            quadrupol_coordinates = multipole_coordinates[idx]
+            if self.coordinates2 is None or not np.array_equal(self.coordinates0, quadrupol_coordinates):
+                self.coordinates2 = quadrupol_coordinates
+                for ii, pos in enumerate(self.coordinates2):
+                    with self.mol.with_rinv_orig(pos):
+                        self.integral2_1 = self.mol.intor('int1e_ipipiprinv', comp=27).reshape(3, 9, self.mol.nao, self.mol.nao)
+                        self.integral2_2 = self.mol.intor('int1e_ipiprinvip', comp=27).reshape(3, 9, self.mol.nao, self.mol.nao)
+                        self.integral2_3 = self.integral2_2.reshape(3, 3, 3, -1).transpose(2, 0, 1, -1).reshape(3, 9, self.mol.nao, self.mol.nao)
+                        op += np.einsum('caij,a->cij', self.integral2_1, quadrupoles[ii])
+                        op += np.einsum('caij,a->cij', self.integral2_3, quadrupoles[ii])
+                        op += 2.0 * np.einsum('caij,a->cij', self.integral2_2, quadrupoles[ii])
+                return op
+            else:
+                for ii, pos in enumerate(self.coordinates2):
+                    with self.mol.with_rinv_orig(pos):
+                        op += np.einsum('caij,a->cij', self.integral2_1, quadrupoles[ii])
+                        op += np.einsum('caij,a->cij', self.integral2_3, quadrupoles[ii])
+                        op += 2.0 * np.einsum('caij,a->cij', self.integral2_2, quadrupoles[ii])
+                return op
+        return op
+
+    def electronic_field_gradient(self,
+                                  coordinates: np.ndarray,
+                                  density_matrix: np.ndarray) -> np.ndarray:
+        if self.coordinates1 is None or not np.array_equal(self.coordinates1, coordinates):
+            self.coordinates1 = coordinates
+            fakemol = gto.fakemol_for_charges(self.coordinates1)
+            # ergibt das sinn? müsste es nicht einfach nur erste ableitung sein.. -tD
+            self.integral1_1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipip1', comp=9)
+            self.integral1_2 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipvip1', comp=9)
+        integral1_1 = self.integral1_1
+        integral1_2 = self.integral1_2
+        integral1_1 = integral1_1.reshape(3, 3, *integral1_1.shape[1:])
+        integral1_2 = integral1_2.reshape(3, 3, *integral1_2.shape[1:])
+        # g is number of sites, a is xx, xy, xz .. should be 6 elements
+        el_field_grad = np.einsum('caijg,ij->cag', integral1_1, density_matrix)
+        el_field_grad += np.einsum('caijg,ij->cag', integral1_2, density_matrix)
+        return el_field_grad
+
+
+
 
 def make_grad_object(grad_method):
-    '''For grad_method in vacuum, add nuclear gradients of solvent pcmobj'''
+    '''
+    '''
 
     # Zeroth order method object must be a solvation-enabled method
     assert isinstance(grad_method.base, _Embedding)
@@ -48,9 +167,10 @@ def make_grad_object(grad_method):
     class EmbeddingGrad(grad_method_class):
         def __init__(self, grad_method):
             self.__dict__.update(grad_method.__dict__)
-            self.de_solvent = None
-            self.de_solute = None
-            self._keys = self._keys.union(['de_solvent', 'de_solute'])
+            self.de_classical_subsystem = None
+            self.de_quantum_subsystem = None
+            self._keys = self._keys.union(['de_classical_subsystem', 'de_quantum_subsystem'])
+
 
         # TODO: if moving to python3, change signature to
         # def kernel(self, *args, dm=None, atmlst=None, **kwargs):
@@ -59,9 +179,9 @@ def make_grad_object(grad_method):
             if dm is None:
                 dm = self.base.make_rdm1(ao_repr=True)
 
-            self.de_solvent = kernel(self.base.with_embedding, dm)
-            self.de_solute = grad_method_class.kernel(self, *args, **kwargs)
-            self.de = self.de_solute + self.de_solvent
+            self.de_classical_subsystem = kernel(self.base.with_embedding, dm)
+            self.de_quantum_subsystem = grad_method_class.kernel(self, *args, **kwargs)
+            self.de = self.de_quantum_subsystem + self.de_classical_subsystem
 
             if self.verbose >= logger.NOTE:
                 logger.note(self, '--------------- %s (+%s) gradients ---------------',
@@ -86,20 +206,44 @@ def kernel(embedding_obj, dm, verbose=None):
     mol = embedding_obj.mol
     natoms = mol.natm
     de = np.zeros((natoms, 3))
-    cppe_state = embedding_obj.cppe_state
-    nuc_ee_grad = cppe_state.nuclear_interaction_energy_gradient()
-    op = _grad_electrostatic_elec(mol, embedding_obj)
-
-    # induction part
-    positions = cppe_state.positions_polarizable
-    n_polsites = positions.shape[0]
-    if n_polsites > 0:
-        nuc_field_grad = cppe_state.nuclear_field_gradient().reshape(natoms, 3, n_polsites, 3)
-        mu_hf = _induced_moments(mol, embedding_obj, positions, dm, elec_only=False)
-        v = _grad_induction_elec(mol, positions, mu_hf)
-        grad_induction_nuc = -numpy.einsum("acpk,pk->ac", nuc_field_grad, mu_hf)
-        de += grad_induction_nuc
-        op += v
-    elec_ee_grad = _grad_from_operator(mol, op, dm)
-    de += nuc_ee_grad + elec_ee_grad
+    quantum_subsystem = embedding_obj.quantum_subsystem
+    classical_subsystem = embedding_obj.classical_subsystem
+    e_es_nuc_grad = electrostatic_interactions.compute_electrostatic_nuclear_gradients(
+        quantum_subsystem=quantum_subsystem,
+        classical_subsystem=classical_subsystem)
+    integral_driver = EmbeddingIntegralDriver(molecule=mol)
+    f_es_el_grad = electrostatic_interactions.es_fock_matrix_gradient_contributions(
+        classical_subsystem=classical_subsystem,
+        integral_driver=integral_driver)
+    e_es_el_grad = _grad_from_operator(mol, f_es_el_grad, dm)
+    el_fields = quantum_subsystem.compute_electronic_fields(coordinates=classical_subsystem.coordinates,
+                                                                 density_matrix=dm[0],
+                                                                 integral_driver=embedding_obj._integral_driver)
+    nuc_fields = quantum_subsystem.compute_nuclear_fields(classical_subsystem.coordinates)
+    classical_subsystem.solve_induced_dipoles(external_fields=(el_fields + nuc_fields),
+                                              threshold=embedding_obj._threshold,
+                                              max_iterations=embedding_obj._max_iterations,
+                                              solver=embedding_obj._solver)
+    nuc_field_grad = quantum_subsystem.compute_nuclear_field_gradients(coordinates=classical_subsystem.coordinates)
+    el_field_grad = quantum_subsystem.compute_electronic_field_gradients(coordinates=classical_subsystem.coordinates,
+                                                                         density_matrix=dm[0])
+    e_ind_grad = induction_interactions.compute_induction_energy_gradient(
+        induced_dipoles=classical_subsystem.induced_dipoles.induced_dipoles,
+        total_field_gradients=nuc_field_grad + el_field_grad)
+    de += e_ind_grad + e_es_nuc_grad + e_es_el_grad
+    # TODO add vdw as well
     return de
+
+def _grad_from_operator(mol, op, dm):
+    natoms = mol.natm
+    ao_slices = mol.aoslice_by_atom()
+    grad = np.zeros((natoms, 3))
+    for ia in range(natoms):
+        k0, k1 = ao_slices[ia, 2:]
+        # if peobj.do_ecp:
+        #     op[:, k0:k1] += peobj.ecpmol.intor('ECPscalar_ipnuc', comp=3)[:, k0:k1]
+        Dx_a = np.zeros_like(op)
+        Dx_a[:, k0:k1] = op[:, k0:k1]
+        Dx_a += Dx_a.transpose(0, 2, 1)
+        grad[ia] -= np.einsum("xpq,pq", Dx_a, dm)
+    return grad

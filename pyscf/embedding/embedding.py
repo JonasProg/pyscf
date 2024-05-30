@@ -48,25 +48,15 @@ def embedding_for_scf(mf, solvent_obj):
 
 class EmbeddingIntegralDriver:
 
-    def __init__(self, molecule, coordinates=None):
+    def __init__(self, molecule):
         self.mol = molecule
-        if coordinates is not None:
-            self.coordinates0 = coordinates
-            self.coordinates1 = coordinates
-            self.coordinates2 = coordinates
-            fakemol = gto.fakemol_for_charges(coordinates)
-            self.integral0 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e')
-            self.integral1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ip1')
-            self.integral2_1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipip1')
-            self.integral2_2 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipvip1')
-        else:
-            self.coordinates0 = None
-            self.coordinates1 = None
-            self.coordinates2 = None
-            self.integral0 = None
-            self.integral1 = None
-            self.integral2_1 = None
-            self.integral2_2 = None
+        self.coordinates0 = None
+        self.coordinates1 = None
+        self.coordinates2 = None
+        self.integral0 = None
+        self.integral1 = None
+        self.integral2_1 = None
+        self.integral2_2 = None
 
     def electronic_fields(self,
                           coordinates: np.ndarray,
