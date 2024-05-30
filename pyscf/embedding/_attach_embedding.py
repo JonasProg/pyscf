@@ -107,3 +107,9 @@ class SCFWithEmbedding(_Embedding):
         self.scf_summary['e_embedding'] = vhf.e_embedding.real
         logger.debug(self, 'Embedding Energy = %.15g', vhf.e_embedding)
         return e_tot, e_coul
+
+    def nuc_grad_method(self):
+        grad_method = super().nuc_grad_method()
+        return self.with_embedding.nuc_grad_method(grad_method)
+
+    Gradients = nuc_grad_method

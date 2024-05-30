@@ -290,6 +290,10 @@ class PolarizableEmbedding(lib.StreamObject):
         self.v = v
         return self.e, self.v
 
+    def nuc_grad_method(self, grad_method):
+        from pyscf.embedding import embedding_gradient
+        return embedding_gradient.make_grad_object(grad_method)
+
     def _create_pyframe_objects(self):
         # should the creation process get a callback and throw back if sth goes wrong?
         # throw exception if it is not exactly for one qm and one classical subsystem
