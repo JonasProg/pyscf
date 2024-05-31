@@ -40,13 +40,9 @@ class EmbeddingIntegralDriver:
         self.mol = molecule
         self.coordinates0 = None
         self.coordinates1 = None
-        self.coordinates2 = None
         self.integral0 = None
         self.integral1_1 = None
         self.integral1_2 = None
-        self.integral2_1 = None
-        self.integral2_2 = None
-        self.integral2_3 = None
 
     def multipole_potential_gradient_integrals(self,
                                                multipole_coordinates: np.ndarray,
@@ -111,29 +107,19 @@ class EmbeddingIntegralDriver:
             quadrupoles[:, [0, 3, 6, 4, 7, 8]] += quadrupoles_non_symmetrized
             quadrupoles *= -0.5
             quadrupol_coordinates = multipole_coordinates[idx]
-            if self.coordinates2 is None or not np.array_equal(self.coordinates0, quadrupol_coordinates):
-                self.coordinates2 = quadrupol_coordinates
-                for ii, pos in enumerate(self.coordinates2):
-                    with self.mol.with_rinv_orig(pos):
-                        self.integral2_1 = self.mol.intor('int1e_ipipiprinv', comp=27).reshape(3, 9, self.mol.nao, self.mol.nao)
-                        self.integral2_2 = self.mol.intor('int1e_ipiprinvip', comp=27).reshape(3, 9, self.mol.nao, self.mol.nao)
-                        self.integral2_3 = self.integral2_2.reshape(3, 3, 3, -1).transpose(2, 0, 1, -1).reshape(3, 9, self.mol.nao, self.mol.nao)
-                        op += np.einsum('caij,a->cij', self.integral2_1, quadrupoles[ii])
-                        op += np.einsum('caij,a->cij', self.integral2_3, quadrupoles[ii])
-                        op += 2.0 * np.einsum('caij,a->cij', self.integral2_2, quadrupoles[ii])
-                return op
-            else:
-                for ii, pos in enumerate(self.coordinates2):
-                    with self.mol.with_rinv_orig(pos):
-                        op += np.einsum('caij,a->cij', self.integral2_1, quadrupoles[ii])
-                        op += np.einsum('caij,a->cij', self.integral2_3, quadrupoles[ii])
-                        op += 2.0 * np.einsum('caij,a->cij', self.integral2_2, quadrupoles[ii])
-                return op
+            for ii, pos in enumerate(quadrupol_coordinates):
+                with self.mol.with_rinv_orig(pos):
+                    int1 = self.mol.intor('int1e_ipipiprinv', comp=27).reshape(3, 9, self.mol.nao, self.mol.nao)
+                    int2 = self.mol.intor('int1e_ipiprinvip', comp=27).reshape(3, 9, self.mol.nao, self.mol.nao)
+                    int3 = int2.reshape(3, 3, 3, -1).transpose(2, 0, 1, -1).reshape(3, 9, self.mol.nao, self.mol.nao)
+                    op += np.einsum('caij,a->cij', int1, quadrupoles[ii])
+                    op += np.einsum('caji,a->cij', int3, quadrupoles[ii])
+                    op += 2.0 * np.einsum('caij,a->cij', int2, quadrupoles[ii])
         return op
 
-    def electronic_field_gradient(self,
-                                  coordinates: np.ndarray,
-                                  density_matrix: np.ndarray) -> np.ndarray:
+    def ind_fock_matrix_contributions_gradient(self,
+                                               coordinates: np.ndarray,
+                                               induced_dipoles: np.ndarray) -> np.ndarray:
         if self.coordinates1 is None or not np.array_equal(self.coordinates1, coordinates):
             self.coordinates1 = coordinates
             fakemol = gto.fakemol_for_charges(self.coordinates1)
@@ -144,10 +130,9 @@ class EmbeddingIntegralDriver:
         integral1_2 = self.integral1_2
         integral1_1 = integral1_1.reshape(3, 3, *integral1_1.shape[1:])
         integral1_2 = integral1_2.reshape(3, 3, *integral1_2.shape[1:])
-        # g is number of sites, a is xx, xy, xz .. should be 6 elements
-        el_field_grad = np.einsum('caijg,ij->cag', integral1_1, density_matrix)
-        el_field_grad += np.einsum('caijg,ij->cag', integral1_2, density_matrix)
-        return el_field_grad
+        v = np.einsum('caijg,ga->cij', integral1_1, induced_dipoles)
+        v += np.einsum('caijg,ga->cij', integral1_2, induced_dipoles)
+        return v
 
 
 
@@ -212,12 +197,12 @@ def kernel(embedding_obj, dm, verbose=None):
         quantum_subsystem=quantum_subsystem,
         classical_subsystem=classical_subsystem)
     integral_driver = EmbeddingIntegralDriver(molecule=mol)
-    f_es_el_grad = electrostatic_interactions.es_fock_matrix_gradient_contributions(
+    f_es_grad = electrostatic_interactions.es_fock_matrix_gradient_contributions(
         classical_subsystem=classical_subsystem,
         integral_driver=integral_driver)
-    e_es_el_grad = _grad_from_operator(mol, f_es_el_grad, dm)
+    e_es_el_grad = _grad_from_operator(mol, f_es_grad, dm)
     el_fields = quantum_subsystem.compute_electronic_fields(coordinates=classical_subsystem.coordinates,
-                                                                 density_matrix=dm[0],
+                                                                 density_matrix=dm,
                                                                  integral_driver=embedding_obj._integral_driver)
     nuc_fields = quantum_subsystem.compute_nuclear_fields(classical_subsystem.coordinates)
     classical_subsystem.solve_induced_dipoles(external_fields=(el_fields + nuc_fields),
@@ -225,12 +210,15 @@ def kernel(embedding_obj, dm, verbose=None):
                                               max_iterations=embedding_obj._max_iterations,
                                               solver=embedding_obj._solver)
     nuc_field_grad = quantum_subsystem.compute_nuclear_field_gradients(coordinates=classical_subsystem.coordinates)
-    el_field_grad = quantum_subsystem.compute_electronic_field_gradients(coordinates=classical_subsystem.coordinates,
-                                                                         density_matrix=dm[0])
-    e_ind_grad = induction_interactions.compute_induction_energy_gradient(
+    # TODO here
+    f_ind_grad = induction_interactions.ind_fock_matrix_gradient_contributions(
+        classical_subsystem=classical_subsystem,
+        integral_driver=integral_driver)
+    e_ind_el_grad = _grad_from_operator(mol, f_ind_grad, dm)
+    e_ind_nuc_grad = induction_interactions.compute_induction_energy_gradient(
         induced_dipoles=classical_subsystem.induced_dipoles.induced_dipoles,
-        total_field_gradients=nuc_field_grad + el_field_grad)
-    de += e_ind_grad + e_es_nuc_grad + e_es_el_grad
+        total_field_gradients=nuc_field_grad)
+    de += -e_ind_nuc_grad  - e_ind_el_grad - e_es_nuc_grad + e_es_el_grad
     # TODO add vdw as well
     return de
 

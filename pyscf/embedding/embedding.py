@@ -305,6 +305,16 @@ class PolarizableEmbedding(lib.StreamObject):
         density_matrix = np.asarray(density_matrix)
         nao = density_matrix.shape[-1]
         density_matrix = density_matrix.reshape(-1, nao, nao)
+        if self._e_nuc_es is None:
+            self._e_nuc_es = electrostatic_interactions.compute_electrostatic_nuclear_energy(
+            quantum_subsystem=self.quantum_subsystem,
+            classical_subsystem=self.classical_subsystem)
+        if self._f_el_es is None:
+            self._f_el_es = electrostatic_interactions.es_fock_matrix_contributions(
+            classical_subsystem=self.classical_subsystem,
+            integral_driver=self._integral_driver)
+        self._e_rep = 0.0
+        self._e_disp = 0.0
         e_el_es = np.einsum('ij,xij->x', self._f_el_es, density_matrix)[0]
         el_fields = self.quantum_subsystem.compute_electronic_fields(coordinates=self.classical_subsystem.coordinates,
                                                                      density_matrix=density_matrix[0],
