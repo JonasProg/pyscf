@@ -25,7 +25,8 @@ except ImportError:
     raise ImportError(
         'Unable to import PyFraME. Please install PyFraME.')
 
-from pyframe.embedding import electrostatic_interactions, induction_interactions
+from pyframe.embedding import (electrostatic_interactions, induction_interactions, repulsion_interactions,
+                               dispersion_interactions)
 
 from pyscf.lib import logger
 from pyscf import gto
@@ -62,7 +63,7 @@ class EmbeddingIntegralDriver:
                 Dtype: np.float64
 
         Returns:
-            Product of electronic potential integrals and multipoles.
+            Product of gradient of electronic potential integrals and multipoles.
                 Shape: (number of nuclei, number of ao functions, number of ao functions)
                 Dtype: np.float64
         """
@@ -117,13 +118,27 @@ class EmbeddingIntegralDriver:
                     op += 2.0 * np.einsum('caij,a->cij', int2, quadrupoles[ii])
         return op
 
-    def ind_fock_matrix_contributions_gradient(self,
-                                               coordinates: np.ndarray,
-                                               induced_dipoles: np.ndarray) -> np.ndarray:
-        if self.coordinates1 is None or not np.array_equal(self.coordinates1, coordinates):
-            self.coordinates1 = coordinates
+    def induced_fock_matrix_contributions_gradient(self,
+                                                   multipole_coordinates: np.ndarray,
+                                                   induced_dipoles: np.ndarray) -> np.ndarray:
+        """Calculate the gradient of the induced Fock-matrix contributions.
+
+        Args:
+            multipole_coordinates: Coordinates of the Multipoles.
+                Shape: (number of atoms, 3)
+                Dtype: np.float64
+            induced_dipoles: Induced dipoles on the Multipoles.
+                Shape: (number of atoms, 3)
+                Dtype: np.float64
+
+        Returns:
+            Gradient of induced Fock-matrix contributions.
+                Shape: (number of nuclei, number of ao functions, number of ao functions)
+                Dtype: np.float64
+        """
+        if self.coordinates1 is None or not np.array_equal(self.coordinates1, multipole_coordinates):
+            self.coordinates1 = multipole_coordinates
             fakemol = gto.fakemol_for_charges(self.coordinates1)
-            # ergibt das sinn? müsste es nicht einfach nur erste ableitung sein.. -tD
             self.integral1_1 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipip1', comp=9)
             self.integral1_2 = df.incore.aux_e2(self.mol, fakemol, intor='int3c2e_ipvip1', comp=9)
         integral1_1 = self.integral1_1
@@ -135,18 +150,13 @@ class EmbeddingIntegralDriver:
         return v
 
 
-
-
 def make_grad_object(grad_method):
     '''
     '''
-
-    # Zeroth order method object must be a solvation-enabled method
     assert isinstance(grad_method.base, _Embedding)
     logger.warn(grad_method, "PE gradients are not optimized for performance.")
     if not isinstance(grad_method.base, scf.hf.SCF):
         raise NotImplementedError("PE gradients only implemented for SCF methods.")
-
     grad_method_class = grad_method.__class__
 
     class EmbeddingGrad(grad_method_class):
@@ -160,6 +170,8 @@ def make_grad_object(grad_method):
         # TODO: if moving to python3, change signature to
         # def kernel(self, *args, dm=None, atmlst=None, **kwargs):
         def kernel(self, *args, **kwargs):
+            '''
+            '''
             dm = kwargs.pop('dm', None)
             if dm is None:
                 dm = self.base.make_rdm1(ao_repr=True)
@@ -210,16 +222,28 @@ def kernel(embedding_obj, dm, verbose=None):
                                               max_iterations=embedding_obj._max_iterations,
                                               solver=embedding_obj._solver)
     nuc_field_grad = quantum_subsystem.compute_nuclear_field_gradients(coordinates=classical_subsystem.coordinates)
-    # TODO here
-    f_ind_grad = induction_interactions.ind_fock_matrix_gradient_contributions(
+    f_ind_grad = induction_interactions.induced_fock_matrix_contributions_gradient(
         classical_subsystem=classical_subsystem,
         integral_driver=integral_driver)
     e_ind_el_grad = _grad_from_operator(mol, f_ind_grad, dm)
     e_ind_nuc_grad = induction_interactions.compute_induction_energy_gradient(
         induced_dipoles=classical_subsystem.induced_dipoles.induced_dipoles,
         total_field_gradients=nuc_field_grad)
-    de += -e_ind_nuc_grad  - e_ind_el_grad - e_es_nuc_grad + e_es_el_grad
-    # TODO add vdw as well
+    if embedding_obj.vdw_method is not None:
+        e_rep_grad = repulsion_interactions.compute_repulsion_interactions_gradient(
+            quantum_subsystem=quantum_subsystem,
+            classical_subsystem=classical_subsystem,
+            method=embedding_obj.vdw_method,
+            combination_rule=embedding_obj.vdw_combination_rule)
+        e_disp_grad = dispersion_interactions.compute_dispersion_interactions_gradient(
+            quantum_subsystem=quantum_subsystem,
+            classical_subsystem=classical_subsystem,
+            method=embedding_obj.vdw_method,
+            combination_rule=embedding_obj.vdw_combination_rule)
+    else:
+        e_rep_grad = 0.0
+        e_disp_grad = 0.0
+    de += -e_ind_nuc_grad  + e_ind_el_grad - e_es_nuc_grad + e_es_el_grad + e_rep_grad + e_disp_grad
     return de
 
 def _grad_from_operator(mol, op, dm):
@@ -228,8 +252,6 @@ def _grad_from_operator(mol, op, dm):
     grad = np.zeros((natoms, 3))
     for ia in range(natoms):
         k0, k1 = ao_slices[ia, 2:]
-        # if peobj.do_ecp:
-        #     op[:, k0:k1] += peobj.ecpmol.intor('ECPscalar_ipnuc', comp=3)[:, k0:k1]
         Dx_a = np.zeros_like(op)
         Dx_a[:, k0:k1] = op[:, k0:k1]
         Dx_a += Dx_a.transpose(0, 2, 1)

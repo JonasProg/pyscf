@@ -313,8 +313,31 @@ class PolarizableEmbedding(lib.StreamObject):
             self._f_el_es = electrostatic_interactions.es_fock_matrix_contributions(
             classical_subsystem=self.classical_subsystem,
             integral_driver=self._integral_driver)
-        self._e_rep = 0.0
-        self._e_disp = 0.0
+        if self._e_rep is None or self._e_disp is None:
+            if 'vdw' in self.options:
+                if not isinstance(self.options['vdw'], dict):
+                    raise TypeError("vdw options should be a dictionary.")
+                if 'method' in self.options['vdw']:
+                    self.vdw_method = self.options['vdw']['method']
+                else:
+                    self.vdw_method = 'LJ'
+                if 'combination_rule' in self.options['vdw']:
+                    self.vdw_combination_rule = self.options['vdw']['combination_rule']
+                else:
+                    self.vdw_combination_rule = 'Lorentz-Berthelot'
+                self._e_rep = repulsion_interactions.compute_repulsion_interactions(
+                    quantum_subsystem=self.quantum_subsystem,
+                    classical_subsystem=self.classical_subsystem,
+                    method=self.vdw_method,
+                    combination_rule=self.vdw_combination_rule)
+                self._e_disp = dispersion_interactions.compute_dispersion_interactions(
+                    quantum_subsystem=self.quantum_subsystem,
+                    classical_subsystem=self.classical_subsystem,
+                    method=self.vdw_method,
+                    combination_rule=self.vdw_combination_rule)
+            else:
+                self._e_rep = 0.0
+                self._e_disp = 0.0
         e_el_es = np.einsum('ij,xij->x', self._f_el_es, density_matrix)[0]
         el_fields = self.quantum_subsystem.compute_electronic_fields(coordinates=self.classical_subsystem.coordinates,
                                                                      density_matrix=density_matrix[0],
