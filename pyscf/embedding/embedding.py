@@ -182,6 +182,16 @@ class PolarizableEmbedding(lib.StreamObject):
         self.verbose = molecule.verbose
         # communicator?
         self.comm = None
+        # e (the electrostatic, induction energy, repulsion energy, and dispersion energy.)
+        # and v (the additional potential) are
+        # updated during the SCF iterations
+        self.e = None
+        self.v = None
+        self._dm = None
+        self._e_ind = None
+        self._e_es = None
+        self.vdw_method = None
+        self.vdw_combination_rule = None
 
         self.mol = molecule
         self.max_memory = molecule.max_memory
@@ -245,15 +255,6 @@ class PolarizableEmbedding(lib.StreamObject):
             self._environment_energy = self.options['environment_energy']
         else:
             self._environment_energy = True
-
-        # e (the electrostatic, induction energy, repulsion energy, and dispersion energy.)
-        # and v (the additional potential) are
-        # updated during the SCF iterations
-        self.e = None
-        self.v = None
-        self._dm = None
-        self._e_ind = None
-        self._e_es = None
 
     def dump_flags(self, verbose=None):
         logger.info(self, '******** %s flags ********', self.__class__)

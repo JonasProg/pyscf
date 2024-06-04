@@ -26,8 +26,8 @@ except ImportError:
 
 dir_name = os.path.dirname(__file__)
 
-class TestPolEmbed(unittest.TestCase):
-    def test_pol_embed_scf(self):
+class TestPolarizableEmbedding(unittest.TestCase):
+    def test_polarizable_embedding_scf(self):
         mol = pyscf.M(atom='''
         C     32.081000    29.944000    30.110000
         C     30.771000    30.374000    29.820000
