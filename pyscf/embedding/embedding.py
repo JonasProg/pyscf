@@ -140,7 +140,6 @@ class EmbeddingIntegralDriver:
             n_sites = idx.size
             quadrupoles_non_symmetrized = np.array([multipoles[i][4:10] for i in idx])
             quadrupoles = np.zeros((n_sites, 9))
-            # FIXME build my own matrix.
             quadrupoles[:, [0, 1, 2, 4, 5, 8]] = quadrupoles_non_symmetrized
             quadrupoles[:, [0, 3, 6, 4, 7, 8]] += quadrupoles_non_symmetrized
             quadrupoles *= -0.5

@@ -103,7 +103,6 @@ class EmbeddingIntegralDriver:
             n_sites = idx.size
             quadrupoles_non_symmetrized = np.array([multipoles[i][4:10] for i in idx])
             quadrupoles = np.zeros((n_sites, 9))
-            # FIXME build my own matrix.
             quadrupoles[:, [0, 1, 2, 4, 5, 8]] = quadrupoles_non_symmetrized
             quadrupoles[:, [0, 3, 6, 4, 7, 8]] += quadrupoles_non_symmetrized
             quadrupoles *= -0.5
@@ -167,9 +166,7 @@ def make_grad_object(grad_method):
             self._keys = self._keys.union(['de_classical_subsystem', 'de_quantum_subsystem'])
 
 
-        # TODO: if moving to python3, change signature to
-        # def kernel(self, *args, dm=None, atmlst=None, **kwargs):
-        def kernel(self, *args, **kwargs):
+        def kernel(self, *args, dm=None, atmlst=None, **kwargs):
             '''
             '''
             dm = kwargs.pop('dm', None)
